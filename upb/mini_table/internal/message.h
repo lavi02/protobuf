@@ -16,6 +16,14 @@
 // Must be last.
 #include "upb/port/def.inc"
 
+// We reserve unused hasbits at the start of each buffer to make room for
+// upb_Message fields. Unfortunately we can't simply use sizeof(upb_Message)
+// because messages depend upon minitables, not the other way around.
+#define kUpb_Reserved_Hasbytes 8
+
+// 64 is the first hasbit that we currently use.
+#define kUpb_Reserved_Hasbits (kUpb_Reserved_Hasbytes * 8)
+
 struct upb_Decoder;
 struct upb_Message;
 typedef const char* _upb_FieldParser(struct upb_Decoder* d, const char* ptr,
@@ -138,17 +146,16 @@ UPB_INLINE bool UPB_PRIVATE(_upb_MiniTable_MessageFieldIsLinked)(
   return UPB_PRIVATE(_upb_MiniTable_GetSubMessageTable)(m, f) != NULL;
 }
 
-// Computes a bitmask in which the |m->required_count| lowest bits are set,
-// except that we skip the lowest bit (because upb never uses hasbit 0).
+// Computes a bitmask in which the |m->required_count| lowest bits are set.
 //
 // Sample output:
-//    RequiredMask(1) => 0b10 (0x2)
-//    RequiredMask(5) => 0b111110 (0x3e)
+//    RequiredMask(1) => 0b1 (0x1)
+//    RequiredMask(5) => 0b11111 (0x1f)
 UPB_INLINE uint64_t
 UPB_PRIVATE(_upb_MiniTable_RequiredMask)(const struct upb_MiniTable* m) {
   int n = m->UPB_PRIVATE(required_count);
-  UPB_ASSERT(0 < n && n <= 63);
-  return ((1ULL << n) - 1) << 1;
+  UPB_ASSERT(0 < n && n <= 64);
+  return (1ULL << n) - 1;
 }
 
 #ifdef __cplusplus

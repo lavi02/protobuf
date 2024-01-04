@@ -610,8 +610,8 @@ upb_Map* _upb_Decoder_CreateMap(upb_Decoder* d, const upb_MiniTable* entry) {
   const upb_MiniTableField* val_field = &entry->UPB_PRIVATE(fields)[1];
   char key_size = kSizeInMap[key_field->UPB_PRIVATE(descriptortype)];
   char val_size = kSizeInMap[val_field->UPB_PRIVATE(descriptortype)];
-  UPB_ASSERT(key_field->UPB_PRIVATE(offset) == offsetof(upb_MapEntryData, k));
-  UPB_ASSERT(val_field->UPB_PRIVATE(offset) == offsetof(upb_MapEntryData, v));
+  UPB_ASSERT(key_field->UPB_PRIVATE(offset) == offsetof(upb_MapEntry, k));
+  UPB_ASSERT(val_field->UPB_PRIVATE(offset) == offsetof(upb_MapEntry, v));
   upb_Map* ret = _upb_Map_New(&d->arena, key_size, val_size);
   if (!ret) _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
   return ret;
@@ -649,21 +649,21 @@ static const char* _upb_Decoder_DecodeToMap(upb_Decoder* d, const char* ptr,
     upb_TaggedMessagePtr msg;
     _upb_Decoder_NewSubMessage(d, entry->UPB_PRIVATE(subs),
                                &entry->UPB_PRIVATE(fields)[1], &msg);
-    ent.data.v.val = upb_value_uintptr(msg);
+    ent.v.val = upb_value_uintptr(msg);
   }
 
-  ptr = _upb_Decoder_DecodeSubMessage(d, ptr, (upb_Message*)&ent.data, subs,
-                                      field, val->size);
+  ptr = _upb_Decoder_DecodeSubMessage(d, ptr, &ent.message, subs, field,
+                                      val->size);
   // check if ent had any unknown fields
   size_t size;
-  upb_Message_GetUnknown((upb_Message*)&ent.data, &size);
+  upb_Message_GetUnknown(&ent.message, &size);
   if (size != 0) {
     char* buf;
     size_t size;
     uint32_t tag =
         ((uint32_t)field->UPB_PRIVATE(number) << 3) | kUpb_WireType_Delimited;
     upb_EncodeStatus status =
-        upb_Encode((upb_Message*)&ent.data, entry, 0, &d->arena, &buf, &size);
+        upb_Encode(&ent.message, entry, 0, &d->arena, &buf, &size);
     if (status != kUpb_EncodeStatus_Ok) {
       _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
     }
@@ -672,8 +672,7 @@ static const char* _upb_Decoder_DecodeToMap(upb_Decoder* d, const char* ptr,
       _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
     }
   } else {
-    if (_upb_Map_Insert(map, &ent.data.k, map->key_size, &ent.data.v,
-                        map->val_size,
+    if (_upb_Map_Insert(map, &ent.k, map->key_size, &ent.v, map->val_size,
                         &d->arena) == kUpb_MapInsertStatus_OutOfMemory) {
       _upb_Decoder_ErrorJmp(d, kUpb_DecodeStatus_OutOfMemory);
     }
@@ -753,14 +752,8 @@ const char* _upb_Decoder_CheckRequired(upb_Decoder* d, const char* ptr,
                                        const upb_Message* msg,
                                        const upb_MiniTable* m) {
   UPB_ASSERT(m->UPB_PRIVATE(required_count));
-  if (UPB_LIKELY((d->options & kUpb_DecodeOption_CheckRequired) == 0)) {
-    return ptr;
-  }
-  uint64_t msg_head;
-  memcpy(&msg_head, msg, 8);
-  msg_head = upb_BigEndian64(msg_head);
-  if (UPB_PRIVATE(_upb_MiniTable_RequiredMask)(m) & ~msg_head) {
-    d->missing_required = true;
+  if (UPB_UNLIKELY(d->options & kUpb_DecodeOption_CheckRequired)) {
+    d->missing_required = UPB_PRIVATE(_upb_Message_MissingRequired)(msg, m);
   }
   return ptr;
 }
@@ -1323,10 +1316,11 @@ const char* _upb_FastDecoder_DecodeGeneric(struct upb_Decoder* d,
 }
 
 static upb_DecodeStatus _upb_Decoder_DecodeTop(struct upb_Decoder* d,
-                                               const char* buf, void* msg,
-                                               const upb_MiniTable* l) {
-  if (!_upb_Decoder_TryFastDispatch(d, &buf, msg, l)) {
-    _upb_Decoder_DecodeMessage(d, buf, msg, l);
+                                               const char* buf,
+                                               upb_Message* msg,
+                                               const upb_MiniTable* m) {
+  if (!_upb_Decoder_TryFastDispatch(d, &buf, msg, m)) {
+    _upb_Decoder_DecodeMessage(d, buf, msg, m);
   }
   if (d->end_group != DECODE_NOGROUP) return kUpb_DecodeStatus_Malformed;
   if (d->missing_required) return kUpb_DecodeStatus_MissingRequired;
@@ -1342,11 +1336,11 @@ const char* _upb_Decoder_IsDoneFallback(upb_EpsCopyInputStream* e,
 
 static upb_DecodeStatus upb_Decoder_Decode(upb_Decoder* const decoder,
                                            const char* const buf,
-                                           void* const msg,
-                                           const upb_MiniTable* const l,
+                                           upb_Message* const msg,
+                                           const upb_MiniTable* const m,
                                            upb_Arena* const arena) {
   if (UPB_SETJMP(decoder->err) == 0) {
-    decoder->status = _upb_Decoder_DecodeTop(decoder, buf, msg, l);
+    decoder->status = _upb_Decoder_DecodeTop(decoder, buf, msg, m);
   } else {
     UPB_ASSERT(decoder->status != kUpb_DecodeStatus_Ok);
   }
@@ -1357,7 +1351,7 @@ static upb_DecodeStatus upb_Decoder_Decode(upb_Decoder* const decoder,
 }
 
 upb_DecodeStatus upb_Decode(const char* buf, size_t size, upb_Message* msg,
-                            const upb_MiniTable* l,
+                            const upb_MiniTable* m,
                             const upb_ExtensionRegistry* extreg, int options,
                             upb_Arena* arena) {
   upb_Decoder decoder;
@@ -1381,7 +1375,7 @@ upb_DecodeStatus upb_Decode(const char* buf, size_t size, upb_Message* msg,
   // (particularly parent_or_count).
   UPB_PRIVATE(_upb_Arena_SwapIn)(&decoder.arena, arena);
 
-  return upb_Decoder_Decode(&decoder, buf, msg, l, arena);
+  return upb_Decoder_Decode(&decoder, buf, msg, m, arena);
 }
 
 #undef OP_FIXPCK_LG2

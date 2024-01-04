@@ -12,6 +12,7 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "upb/base/internal/endian.h"
 #include "upb/base/string_view.h"
 #include "upb/mem/arena.h"
 #include "upb/message/internal/extension.h"
@@ -21,6 +22,7 @@
 #include "upb/mini_table/extension.h"
 #include "upb/mini_table/field.h"
 #include "upb/mini_table/internal/field.h"
+#include "upb/mini_table/message.h"
 
 // Must be last.
 #include "upb/port/def.inc"
@@ -110,6 +112,15 @@ UPB_INLINE bool UPB_PRIVATE(_upb_Message_ClearOneofCase)(
 }
 
 // LINT.ThenChange(GoogleInternalName2)
+
+// Returns true if the message is missing any of its required fields.
+UPB_INLINE bool UPB_PRIVATE(_upb_Message_MissingRequired)(
+    const struct upb_Message* msg, const upb_MiniTable* m) {
+  uint64_t bits;
+  memcpy(&bits, msg + 1, sizeof(bits));
+  bits = upb_BigEndian64(bits);
+  return (UPB_PRIVATE(_upb_MiniTable_RequiredMask)(m) & ~bits) != 0;
+}
 
 UPB_INLINE void* UPB_PRIVATE(_upb_Message_DataPtr)(
     struct upb_Message* msg, const upb_MiniTableField* f) {
@@ -278,9 +289,14 @@ UPB_INLINE bool _upb_Message_SetExtensionField(
   return true;
 }
 
+UPB_INLINE void UPB_PRIVATE(_upb_Message_Clear)(struct upb_Message* msg,
+                                                const upb_MiniTable* m) {
+  memset(msg, 0, m->UPB_PRIVATE(size));
+}
+
 UPB_INLINE void _upb_Message_ClearExtensionField(
     struct upb_Message* msg, const upb_MiniTableExtension* ext_l) {
-  upb_Message_InternalData* in = upb_Message_GetInternalData(msg);
+  upb_Message_InternalData* in = msg->internal;
   if (!in) return;
   const struct upb_Extension* base =
       UPB_PTR_AT(in, in->ext_begin, struct upb_Extension);

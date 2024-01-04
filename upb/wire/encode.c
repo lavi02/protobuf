@@ -424,8 +424,8 @@ static void encode_mapentry(upb_encstate* e, uint32_t number,
   const upb_MiniTableField* val_field = &layout->UPB_PRIVATE(fields)[1];
   size_t pre_len = e->limit - e->ptr;
   size_t size;
-  encode_scalar(e, &ent->data.v, layout->UPB_PRIVATE(subs), val_field);
-  encode_scalar(e, &ent->data.k, layout->UPB_PRIVATE(subs), key_field);
+  encode_scalar(e, &ent->v, layout->UPB_PRIVATE(subs), val_field);
+  encode_scalar(e, &ent->k, layout->UPB_PRIVATE(subs), key_field);
   size = (e->limit - e->ptr) - pre_len;
   encode_varint(e, size);
   encode_tag(e, number, kUpb_WireType_Delimited);
@@ -457,8 +457,8 @@ static void encode_map(upb_encstate* e, const upb_Message* msg,
     upb_value val;
     while (upb_strtable_next2(&map->table, &key, &val, &iter)) {
       upb_MapEntry ent;
-      _upb_map_fromkey(key, &ent.data.k, map->key_size);
-      _upb_map_fromvalue(val, &ent.data.v, map->val_size);
+      _upb_map_fromkey(key, &ent.k, map->key_size);
+      _upb_map_fromvalue(val, &ent.v, map->val_size);
       encode_mapentry(e, f->UPB_PRIVATE(number), layout, &ent);
     }
   }
@@ -548,13 +548,11 @@ static void encode_message(upb_encstate* e, const upb_Message* msg,
                            const upb_MiniTable* m, size_t* size) {
   size_t pre_len = e->limit - e->ptr;
 
-  if ((e->options & kUpb_EncodeOption_CheckRequired) &&
-      m->UPB_PRIVATE(required_count)) {
-    uint64_t msg_head;
-    memcpy(&msg_head, msg, 8);
-    msg_head = upb_BigEndian64(msg_head);
-    if (UPB_PRIVATE(_upb_MiniTable_RequiredMask)(m) & ~msg_head) {
-      encode_err(e, kUpb_EncodeStatus_MissingRequired);
+  if (e->options & kUpb_EncodeOption_CheckRequired) {
+    if (m->UPB_PRIVATE(required_count)) {
+      if (UPB_PRIVATE(_upb_Message_MissingRequired)(msg, m)) {
+        encode_err(e, kUpb_EncodeStatus_MissingRequired);
+      }
     }
   }
 
